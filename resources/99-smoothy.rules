@@ -1,0 +1,5 @@
+# Allow users in the input group to read physical input event devices
+KERNEL=="event*", SUBSYSTEM=="input", GROUP="input", MODE="0660"
+
+# Allow users in the input group to create/use virtual input via uinput
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660"
