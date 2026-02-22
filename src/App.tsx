@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getVersion } from "@tauri-apps/api/app";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 import { AppHeader } from "./components/screens/AppHeader";
 import { HomeScreen } from "./components/screens/HomeScreen";
@@ -9,6 +10,7 @@ import { SettingsScreen } from "./components/screens/SettingsScreen";
 import { ProfilesScreen } from "./components/screens/ProfilesScreen";
 import { ProfileEditorScreen } from "./components/screens/ProfileEditorScreen";
 import { AboutScreen } from "./components/screens/AboutScreen";
+import { Button } from "./components/ui/button";
 // import { Button } from "./components/ui/button";
 import {
   cloneConfig,
@@ -21,6 +23,21 @@ import {
   type RuntimeStatus,
   type ViewScreen,
 } from "./types/app";
+
+const CLOSE_BEHAVIOR_KEY = "smoothy.closeBehavior";
+type ExitBehavior = "ask" | "exit" | "minimize";
+
+function normalizeExitBehavior(value: string | null): ExitBehavior {
+  if (value === "exit" || value === "close") {
+    return "exit";
+  }
+
+  if (value === "minimize") {
+    return "minimize";
+  }
+
+  return "ask";
+}
 
 function App() {
   const [config, setConfig] = useState<PhysicsConfig>(
@@ -59,6 +76,11 @@ function App() {
     cloneConfig(PRESETS.custom),
   );
   const [editorName, setEditorName] = useState<string>("Default");
+  const [showClosePrompt, setShowClosePrompt] = useState<boolean>(false);
+  const [rememberCloseChoice, setRememberCloseChoice] =
+    useState<boolean>(false);
+  const [exitBehavior, setExitBehavior] = useState<ExitBehavior>("ask");
+  const bypassClosePromptRef = useRef(false);
 
   const selectedProfile = useMemo(
     () => profiles.find((profile) => profile.id === selectedProfileId) ?? null,
@@ -140,6 +162,10 @@ function App() {
       ]);
 
       setOsVersion(`${navigator.platform} · ${navigator.userAgent}`);
+      setExitBehavior(
+        normalizeExitBehavior(localStorage.getItem(CLOSE_BEHAVIOR_KEY)),
+      );
+
       try {
         const version = await getVersion();
         setAppVersion(version);
@@ -149,6 +175,48 @@ function App() {
     };
 
     bootstrap().catch((e) => setError(String(e)));
+  }, []);
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    const appWindow = getCurrentWindow();
+    let unlistenCloseRequested: (() => void) | undefined;
+
+    const setupCloseHandler = async () => {
+      unlistenCloseRequested = await appWindow.onCloseRequested((event) => {
+        if (bypassClosePromptRef.current) {
+          bypassClosePromptRef.current = false;
+          return;
+        }
+
+        const saved = normalizeExitBehavior(
+          localStorage.getItem(CLOSE_BEHAVIOR_KEY),
+        );
+
+        if (saved === "exit") {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (saved === "minimize") {
+          void appWindow.minimize();
+          return;
+        }
+
+        setRememberCloseChoice(false);
+        setShowClosePrompt(true);
+      });
+    };
+
+    setupCloseHandler().catch((e) => setError(String(e)));
+
+    return () => {
+      unlistenCloseRequested?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -215,6 +283,59 @@ function App() {
     } catch (e) {
       setError(String(e));
     }
+  }
+
+  async function minimizeToTaskbar() {
+    if (!isTauri()) {
+      return;
+    }
+
+    try {
+      await getCurrentWindow().minimize();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function applyCloseBehavior(choice: Exclude<ExitBehavior, "ask">) {
+    if (rememberCloseChoice) {
+      localStorage.setItem(CLOSE_BEHAVIOR_KEY, choice);
+      setExitBehavior(choice);
+    } else {
+      localStorage.removeItem(CLOSE_BEHAVIOR_KEY);
+      setExitBehavior("ask");
+    }
+
+    setShowClosePrompt(false);
+
+    if (choice === "minimize") {
+      await minimizeToTaskbar();
+      return;
+    }
+
+    if (isTauri()) {
+      try {
+        bypassClosePromptRef.current = true;
+        await getCurrentWindow().close();
+      } catch (e) {
+        bypassClosePromptRef.current = false;
+        setError(String(e));
+      }
+      return;
+    }
+
+    window.close();
+  }
+
+  function updateExitBehavior(value: ExitBehavior) {
+    setExitBehavior(value);
+
+    if (value === "ask") {
+      localStorage.removeItem(CLOSE_BEHAVIOR_KEY);
+      return;
+    }
+
+    localStorage.setItem(CLOSE_BEHAVIOR_KEY, value);
   }
 
   //   async function injectScroll(delta: number) {
@@ -343,6 +464,7 @@ function App() {
         <AppHeader
           daemonRunning={status.daemon_running}
           onToggleService={status.daemon_running ? stopDaemon : startDaemon}
+          onMinimizeToTaskbar={minimizeToTaskbar}
           onNavigate={setScreen}
         />
 
@@ -381,9 +503,11 @@ function App() {
             status={status}
             deviceCount={devices.length}
             permission={permission}
+            exitBehavior={exitBehavior}
             velocityGraph={graphModel}
             onRefreshDiagnostics={refreshPermissions}
             onResetDefaults={resetDefaults}
+            onExitBehaviorChange={updateExitBehavior}
           />
         )}
 
@@ -416,6 +540,55 @@ function App() {
         )}
 
         {screen === "about" && <AboutScreen appVersion={appVersion} />}
+
+        {showClosePrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 px-4">
+            <div className="w-full max-w-md rounded-xl border border-slate-200 bg-white p-5 shadow-lg">
+              <h2 className="text-lg font-semibold text-slate-900">
+                Close Smoothy?
+              </h2>
+              <p className="mt-2 text-sm text-slate-600">
+                Do you want to close the app or minimize it to taskbar?
+              </p>
+
+              <label className="mt-4 flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-300"
+                  checked={rememberCloseChoice}
+                  onChange={(event) =>
+                    setRememberCloseChoice(event.currentTarget.checked)
+                  }
+                />
+                Remember my choice and don't ask again
+              </label>
+
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setShowClosePrompt(false);
+                    setRememberCloseChoice(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => void applyCloseBehavior("minimize")}
+                >
+                  Minimize
+                </Button>
+                <Button
+                  variant="destructive"
+                  onClick={() => void applyCloseBehavior("exit")}
+                >
+                  Exit
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* <footer className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700 shadow-sm">
           <span>Service: {status.daemon_running ? "running" : "stopped"}</span>

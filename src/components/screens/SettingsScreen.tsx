@@ -1,5 +1,12 @@
 import { Button } from "../ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../ui/select";
 import type { PermissionStatus, RuntimeStatus } from "../../types/app";
 
 type SettingsScreenProps = {
@@ -8,6 +15,7 @@ type SettingsScreenProps = {
   status: RuntimeStatus;
   deviceCount: number;
   permission: PermissionStatus | null;
+  exitBehavior: "ask" | "exit" | "minimize";
   velocityGraph: {
     points: string;
     zeroY: number;
@@ -17,6 +25,7 @@ type SettingsScreenProps = {
   };
   onRefreshDiagnostics: () => void;
   onResetDefaults: () => void;
+  onExitBehaviorChange: (value: "ask" | "exit" | "minimize") => void;
 };
 
 export function SettingsScreen({
@@ -25,9 +34,11 @@ export function SettingsScreen({
   status,
   deviceCount,
   permission,
+  exitBehavior,
   velocityGraph,
   onRefreshDiagnostics,
   onResetDefaults,
+  onExitBehaviorChange,
 }: SettingsScreenProps) {
   return (
     <Card>
@@ -43,6 +54,31 @@ export function SettingsScreen({
           <p>Last velocity: {status.last_velocity.toFixed(4)}</p>
           <p>Readable input: {permission?.can_read_any_input ? "yes" : "no"}</p>
           <p>Writable uinput: {permission?.can_write_uinput ? "yes" : "no"}</p>
+        </div>
+
+        <div className="grid gap-2 rounded-md border border-slate-200 p-3">
+          <p className="text-sm font-medium text-slate-900">
+            Exit button behavior
+          </p>
+          <Select
+            value={exitBehavior}
+            onValueChange={(value) =>
+              onExitBehaviorChange(value as "ask" | "exit" | "minimize")
+            }
+          >
+            <SelectTrigger id="exit-button-behavior">
+              <SelectValue placeholder="Select behavior" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ask">Ask on exit</SelectItem>
+              <SelectItem value="exit">Exit app</SelectItem>
+              <SelectItem value="minimize">Minimize to taskbar</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-slate-600">
+            When set to Ask on exit, the close button in the window corner
+            always shows the confirmation prompt.
+          </p>
         </div>
 
         <div className="grid gap-2 rounded-md border border-slate-200 p-3">

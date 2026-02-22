@@ -1,4 +1,4 @@
-import { Menu } from "lucide-react";
+import { Menu, Minus } from "lucide-react";
 
 import { Button } from "../ui/button";
 import {
@@ -13,12 +13,14 @@ import type { ViewScreen } from "../../types/app";
 type AppHeaderProps = {
   daemonRunning: boolean;
   onToggleService: () => void;
+  onMinimizeToTaskbar: () => void;
   onNavigate: (screen: ViewScreen) => void;
 };
 
 export function AppHeader({
   daemonRunning,
   onToggleService,
+  onMinimizeToTaskbar,
   onNavigate,
 }: AppHeaderProps) {
   return (
@@ -31,32 +33,46 @@ export function AppHeader({
         Smoothy
       </button>
 
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="outline" size="icon" aria-label="Application menu">
-            <Menu className="h-5 w-5" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => onNavigate("home")}>
-            Home
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={onToggleService}>
-            {daemonRunning ? "Stop service" : "Start service"}
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem onClick={() => onNavigate("settings")}>
-            Settings
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onNavigate("profiles")}>
-            Profiles
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onNavigate("about")}>
-            About
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <div className="flex items-center gap-2">
+        <Button
+          variant="outline"
+          size="icon"
+          aria-label="Minimize window"
+          onClick={onMinimizeToTaskbar}
+        >
+          <Minus className="h-5 w-5" />
+        </Button>
+
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="icon" aria-label="Application menu">
+              <Menu className="h-5 w-5" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => onNavigate("home")}>
+              Home
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={onToggleService}>
+              {daemonRunning ? "Stop service" : "Start service"}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={onMinimizeToTaskbar}>
+              Hide to taskbar
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem onClick={() => onNavigate("settings")}>
+              Settings
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onNavigate("profiles")}>
+              Profiles
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onNavigate("about")}>
+              About
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </header>
   );
 }
