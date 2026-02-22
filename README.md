@@ -172,3 +172,11 @@ Notes:
 - Backend: Rust, Tokio, evdev, uinput
 - Desktop shell: Tauri v2
 - Frontend: React + TypeScript + Tailwind + Radix UI primitives
+
+## Support / Donation
+
+If Smoothy helps your workflow, you can support development here:
+
+- https://paypal.me/kaotd
+
+---
