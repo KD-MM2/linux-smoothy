@@ -1,13 +1,12 @@
 use serde::Serialize;
 use std::fs::OpenOptions;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 use tauri::{AppHandle, Emitter};
 
 use crate::{
     input::{device_manager, reader::run_input_reader_loop, uinput::ScrollEmitter},
     physics::engine::run_physics_loop,
-    state::{PhysicsConfig, SharedState},
+    state::{monotonic_now_micros, PhysicsConfig, SharedState},
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -41,13 +40,6 @@ fn build_runtime_status(state: &SharedState) -> RuntimeStatus {
 
 fn emit_runtime_status(app: &AppHandle, state: &SharedState) {
     let _ = app.emit("runtime-status", build_runtime_status(state));
-}
-
-fn now_micros() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_micros() as u64)
-        .unwrap_or(0)
 }
 
 fn build_permission_status() -> PermissionStatus {
@@ -240,6 +232,6 @@ pub fn push_scroll_delta(state: State<'_, SharedState>, delta: f64) {
     queue.push(crate::state::WheelInputSample {
         vertical_steps: delta,
         horizontal_steps: 0.0,
-        timestamp_us: now_micros(),
+        timestamp_us: monotonic_now_micros(),
     });
 }

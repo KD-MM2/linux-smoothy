@@ -2,8 +2,9 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc,
+    Arc, OnceLock,
 };
+use std::time::Instant;
 
 #[derive(Debug, Clone, Copy)]
 pub struct WheelInputSample {
@@ -34,14 +35,14 @@ impl Default for PhysicsConfig {
     fn default() -> Self {
         Self {
             step_size_px: 90.0,
-            pulse_scale: 0.8,
-            animation_time_ms: 420.0,
-            acceleration_delta_ms: 70.0,
-            acceleration_scale: 7.0,
-            acceleration_ramp_k: 0.45,
-            max_step_scale: 4.0,
+            pulse_scale: 0.95,
+            animation_time_ms: 520.0,
+            acceleration_delta_ms: 90.0,
+            acceleration_scale: 4.2,
+            acceleration_ramp_k: 0.34,
+            max_step_scale: 4.2,
             max_backlog_px: 3600.0,
-            timer_interval_ms: 4.6,
+            timer_interval_ms: 4.0,
             easing: "easeOutCubic".to_string(),
             reverse_direction: false,
             enable_acceleration: true,
@@ -82,3 +83,8 @@ impl AppState {
 }
 
 pub struct SharedState(pub Arc<AppState>);
+
+pub fn monotonic_now_micros() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_micros() as u64
+}

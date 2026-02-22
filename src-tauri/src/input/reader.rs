@@ -1,16 +1,8 @@
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use evdev::{Device, InputEventKind, RelativeAxisType};
 
-use crate::state::AppState;
-
-fn now_micros() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_micros() as u64)
-        .unwrap_or(0)
-}
+use crate::state::{monotonic_now_micros, AppState};
 
 pub fn run_input_reader_loop(state: Arc<AppState>, device_path: String) -> Result<(), String> {
     let mut device = Device::open(&device_path)
@@ -50,7 +42,7 @@ pub fn run_input_reader_loop(state: Arc<AppState>, device_path: String) -> Resul
             queue.push(crate::state::WheelInputSample {
                 vertical_steps,
                 horizontal_steps,
-                timestamp_us: now_micros(),
+                timestamp_us: monotonic_now_micros(),
             });
             if queue.len() > 2048 {
                 let drain_len = queue.len() - 2048;

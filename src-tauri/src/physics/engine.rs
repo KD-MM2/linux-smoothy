@@ -1,10 +1,10 @@
+use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter};
 use tokio::time::{sleep, Duration};
 
 use crate::input::uinput::ScrollEmitter;
-use crate::state::{AppState, PhysicsConfig};
+use crate::state::{monotonic_now_micros, AppState, PhysicsConfig};
 
 const WHEEL_UNIT: f64 = 120.0;
 const EPSILON: f64 = 0.000_001;
@@ -19,7 +19,7 @@ struct Impulse {
 
 #[derive(Debug, Default)]
 struct AxisState {
-    impulses: Vec<Impulse>,
+    impulses: VecDeque<Impulse>,
     backlog_px: f64,
     residual_hires: f64,
     detent_carry_hires: f64,
@@ -31,13 +31,6 @@ struct SmoothState {
     horizontal: AxisState,
     combo: u32,
     last_input_us: u64,
-}
-
-fn now_micros() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_micros() as u64)
-        .unwrap_or(0)
 }
 
 fn clamp(value: f64, min: f64, max: f64) -> f64 {
@@ -58,6 +51,19 @@ fn ease(progress: f64, easing_mode: &str) -> f64 {
 
     let inverse = 1.0 - progress;
     1.0 - inverse * inverse * inverse
+}
+
+fn ease_derivative(progress: f64, easing_mode: &str) -> f64 {
+    if progress <= 0.0 || progress >= 1.0 {
+        return 0.0;
+    }
+
+    if easing_mode.eq_ignore_ascii_case("linear") {
+        return 1.0;
+    }
+
+    let inverse = 1.0 - progress;
+    3.0 * inverse * inverse
 }
 
 fn trunc_toward_zero(value: f64) -> i32 {
@@ -93,7 +99,13 @@ fn compute_scale(smooth_state: &mut SmoothState, timestamp_us: u64, config: &Phy
     )
 }
 
-fn queue_distance(axis: &mut AxisState, distance_px: f64, timestamp_us: u64, max_backlog_px: f64) {
+fn queue_distance_with_coalescing(
+    axis: &mut AxisState,
+    distance_px: f64,
+    timestamp_us: u64,
+    max_backlog_px: f64,
+    coalesce_window_us: u64,
+) {
     if distance_px.abs() <= EPSILON {
         return;
     }
@@ -110,14 +122,24 @@ fn queue_distance(axis: &mut AxisState, distance_px: f64, timestamp_us: u64, max
 
     axis.backlog_px = clamped_backlog;
 
+    if let Some(last) = axis.impulses.back_mut() {
+        let same_direction =
+            (last.total_px >= 0.0 && accepted >= 0.0) || (last.total_px <= 0.0 && accepted <= 0.0);
+        let within_window = timestamp_us.saturating_sub(last.start_us) <= coalesce_window_us;
+        if same_direction && within_window {
+            last.total_px += accepted;
+            return;
+        }
+    }
+
     if axis.impulses.len() >= 64 {
-        if let Some(last) = axis.impulses.last_mut() {
+        if let Some(last) = axis.impulses.back_mut() {
             last.total_px += accepted;
         }
         return;
     }
 
-    axis.impulses.push(Impulse {
+    axis.impulses.push_back(Impulse {
         start_us: timestamp_us,
         total_px: accepted,
         emitted_px: 0.0,
@@ -126,10 +148,8 @@ fn queue_distance(axis: &mut AxisState, distance_px: f64, timestamp_us: u64, max
 
 fn release_axis(axis: &mut AxisState, now_us: u64, animation_us: f64, easing_mode: &str) -> f64 {
     let mut released_px = 0.0;
-    let mut index = 0;
 
-    while index < axis.impulses.len() {
-        let impulse = &mut axis.impulses[index];
+    axis.impulses.retain_mut(|impulse| {
         let progress = (now_us.saturating_sub(impulse.start_us) as f64) / animation_us;
 
         let target = if progress >= 1.0 {
@@ -146,15 +166,27 @@ fn release_axis(axis: &mut AxisState, now_us: u64, animation_us: f64, easing_mod
             released_px += delta;
         }
 
-        if progress >= 1.0 {
-            axis.impulses.swap_remove(index);
-        } else {
-            index += 1;
-        }
-    }
+        progress < 1.0
+    });
 
     axis.backlog_px -= released_px;
     released_px
+}
+
+fn estimate_axis_velocity_px_per_us(
+    axis: &AxisState,
+    now_us: u64,
+    animation_us: f64,
+    easing_mode: &str,
+) -> f64 {
+    axis.impulses
+        .iter()
+        .map(|impulse| {
+            let progress = (now_us.saturating_sub(impulse.start_us) as f64) / animation_us;
+            let derivative = ease_derivative(progress, easing_mode);
+            (impulse.total_px * derivative) / animation_us
+        })
+        .sum()
 }
 
 fn px_to_hires(delta_px: f64, residual_hires: f64, hires_per_px: f64) -> (i32, f64) {
@@ -196,12 +228,15 @@ fn emit_axis_events(
 
 pub async fn run_physics_loop(state: Arc<AppState>, mut emitter: ScrollEmitter, app: AppHandle) {
     let mut smooth_state = SmoothState::default();
+    let mut velocity_ema = 0.0_f64;
 
     while state.is_daemon_running() {
         let config = state.config.lock().clone();
         let step_size_px = config.step_size_px.max(1.0);
         let hires_per_px = WHEEL_UNIT / step_size_px;
         let animation_us = (config.animation_time_ms * 1_000.0).max(EPSILON);
+        let timer_interval_us = (config.timer_interval_ms * 1_000.0 + 0.5).floor().max(1.0) as u64;
+        let coalesce_window_us = timer_interval_us.saturating_mul(3);
 
         let inputs = {
             let mut queue = state.wheel_input_samples.lock();
@@ -229,11 +264,12 @@ pub async fn run_physics_loop(state: Arc<AppState>, mut emitter: ScrollEmitter, 
             if vertical_steps != 0.0 {
                 let distance_px = vertical_steps * step_size_px * scale;
                 if config.enable_smoothing {
-                    queue_distance(
+                    queue_distance_with_coalescing(
                         &mut smooth_state.vertical,
                         distance_px,
                         input.timestamp_us,
                         config.max_backlog_px,
+                        coalesce_window_us,
                     );
                 } else {
                     immediate_vertical_px += distance_px;
@@ -243,11 +279,12 @@ pub async fn run_physics_loop(state: Arc<AppState>, mut emitter: ScrollEmitter, 
             if horizontal_steps != 0.0 {
                 let distance_px = horizontal_steps * step_size_px * scale;
                 if config.enable_smoothing {
-                    queue_distance(
+                    queue_distance_with_coalescing(
                         &mut smooth_state.horizontal,
                         distance_px,
                         input.timestamp_us,
                         config.max_backlog_px,
+                        coalesce_window_us,
                     );
                 } else {
                     immediate_horizontal_px += distance_px;
@@ -255,7 +292,7 @@ pub async fn run_physics_loop(state: Arc<AppState>, mut emitter: ScrollEmitter, 
             }
         }
 
-        let now_us = now_micros();
+        let now_us = monotonic_now_micros();
         let (released_vertical_px, released_horizontal_px) = if config.enable_smoothing {
             (
                 release_axis(
@@ -313,7 +350,17 @@ pub async fn run_physics_loop(state: Arc<AppState>, mut emitter: ScrollEmitter, 
             }
         }
 
-        let velocity = vertical_hires as f64 / WHEEL_UNIT;
+        let velocity_px_per_us = estimate_axis_velocity_px_per_us(
+            &smooth_state.vertical,
+            now_us,
+            animation_us,
+            &config.easing,
+        );
+        let raw_velocity =
+            (velocity_px_per_us * hires_per_px / WHEEL_UNIT) * timer_interval_us as f64;
+        let ema_alpha = 0.22_f64;
+        velocity_ema += ema_alpha * (raw_velocity - velocity_ema);
+        let velocity = velocity_ema;
 
         {
             let mut last_velocity = state.last_velocity.lock();
@@ -331,7 +378,6 @@ pub async fn run_physics_loop(state: Arc<AppState>, mut emitter: ScrollEmitter, 
             }
         }
 
-        let timer_interval_us = (config.timer_interval_ms * 1_000.0 + 0.5).floor().max(1.0) as u64;
         sleep(Duration::from_micros(timer_interval_us)).await;
     }
 
